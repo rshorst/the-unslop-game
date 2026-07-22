@@ -20,16 +20,17 @@ const wss = new WebSocketServer({ server });
 //  Without a key it returns clearly-labelled simulated output so the
 //  interface still works for previewing the flow.
 // =====================================================================
-const AI_MODEL = process.env.AI_MODEL || 'claude-3-5-haiku-latest';
+const AI_MODEL = process.env.AI_MODEL || 'claude-haiku-4-5';
 
-async function callModel(system, user, maxTokens, providedKey) {
+async function callModel(system, user, maxTokens, providedKey, providedModel) {
   const clean = (typeof providedKey === 'string' && providedKey.trim().startsWith('sk-')) ? providedKey.trim() : '';
   const key = clean || process.env.ANTHROPIC_API_KEY;
   if (!key) return { simulated: true, text: null };
+  const model = (typeof providedModel === 'string' && providedModel.trim()) ? providedModel.trim() : AI_MODEL;
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: AI_MODEL, max_tokens: maxTokens || 700, system, messages: [{ role: 'user', content: user }] }),
+    body: JSON.stringify({ model: model, max_tokens: maxTokens || 700, system, messages: [{ role: 'user', content: user }] }),
   });
   if (!res.ok) { const t = await res.text(); throw new Error('Anthropic API ' + res.status + ': ' + t.slice(0, 300)); }
   const data = await res.json();
@@ -58,10 +59,18 @@ app.get('/api/agents', (req, res) => {
   res.json({ drafter: DRAFTER, agents: AGENTS, hasKey: !!process.env.ANTHROPIC_API_KEY, model: AI_MODEL });
 });
 
+// Resolve which key to use: the caller's own key wins; else the room's shared key.
+function pickKey(b) {
+  if (typeof b.apiKey === 'string' && b.apiKey.trim().startsWith('sk-')) return b.apiKey.trim();
+  if (b.room) { const rm = rooms.get(String(b.room).toUpperCase()); if (rm && rm.aiKey) return rm.aiKey; }
+  return '';
+}
+
 // One step of the machine. mode 'draft' = first agent writes; 'revise' = an agent edits the draft.
 app.post('/api/agent-step', async (req, res) => {
   try {
     const b = req.body || {};
+    const useKey = pickKey(b);
     const seed = (b.seed || '').slice(0, 500);
     const face = b.face === 'unslop' ? 'unslop' : 'slop';
     if (b.mode === 'draft') {
@@ -69,7 +78,7 @@ app.post('/api/agent-step', async (req, res) => {
       const sys = 'You write in character as one agent in a writing machine. No preamble, no markdown, no meta-commentary. Output ONLY a JSON object of the form {"text": "..."}.';
       const user = persona(d) + '\n\nThe seed (the prompt everyone answers) is:\n"' + seed + '"\n\n' +
         'Write your response to the seed in 2–5 sentences, in your voice. Return JSON: {"text": "your response"}.';
-      const r = await callModel(sys, user, 500, b.apiKey);
+      const r = await callModel(sys, user, 500, useKey, b.model);
       if (r.simulated) return res.json({ text: simDraft(seed, face), simulated: true });
       const p = safeJson(r.text);
       return res.json({ text: (p.text || r.text || '').trim() });
@@ -81,7 +90,7 @@ app.post('/api/agent-step', async (req, res) => {
     const notes = priorNotes.length ? '\n\nNotes earlier agents left:\n' + priorNotes.map((n) => '- ' + n).join('\n') : '';
     const user = persona(agent) + '\n\nThe seed was:\n"' + seed + '"\n\nThe current draft:\n"""\n' + draft + '\n"""' + notes +
       '\n\nApply your move to the draft. Return JSON: {"text": "the full revised draft", "note": "one short line in your voice"}.';
-    const r = await callModel(sys, user, 900, b.apiKey);
+    const r = await callModel(sys, user, 900, useKey, b.model);
     if (r.simulated) return res.json({ text: draft, note: '(simulated — add your API key for real output)', simulated: true });
     const p = safeJson(r.text);
     return res.json({ text: (p.text || draft).trim(), note: (p.note || '').trim() });
@@ -130,6 +139,7 @@ function newRoom(code) {
     disabled: {}, // agentId -> true (Act 3)
     custom: [], // custom agents written in Act 3 (also appended to agentData)
     sheets: [], // {id, originSeat, originName, content, history:[{agentName,playerName,note,action}]}
+    aiKey: '', // optional shared Anthropic key set by the facilitator for the room
     sheetsAct: null, // which act the live sheets belong to
     sheetsFace: null,
     archive: [], // snapshots of completed acts: {id, act, face, label, sheets}
@@ -368,6 +378,7 @@ function viewFor(room, playerId) {
       players,
       roster,
       drafter,
+      aiKeySet: !!room.aiKey,
       disabled: room.disabled,
       hasCustom: room.custom.length,
     },
@@ -458,6 +469,7 @@ wss.on('connection', (socket) => {
     // ---- facilitator controls ----
     if (isFac) {
       if (t === 'setSeed') { room.seed = (msg.seed || '').slice(0, 300) || room.seed; broadcast(room); return; }
+      if (t === 'setAiKey') { const k = (msg.key || '').trim(); room.aiKey = k.startsWith('sk-') ? k : ''; broadcast(room); return; }
       if (t === 'setAct') { room.act = Math.min(3, Math.max(1, msg.act | 0)); broadcast(room); return; }
       if (t === 'beginArchitect') { room.act = 3; if (room.seatOrder.some((id) => room.players[id] && !room.players[id].agentId)) dealAgents(room); room.phase = 'architect'; room.face = 'unslop'; broadcast(room); return; }
       if (t === 'deal') { dealAgents(room); broadcast(room); return; }

@@ -63,7 +63,7 @@ ANTHROPIC_API_KEY=sk-ant-... npm start
 
 or `export ANTHROPIC_API_KEY=sk-ant-...` once in your Terminal, then `npm start`. Get a key at console.anthropic.com. Each agent is one short model call, so a full run is a handful of cheap calls; costs add up only if you run it many times.
 
-Without a key the mode still works but returns clearly-labelled **simulated** output, so you can preview the interface. You can also choose the model with `AI_MODEL=...` (default `claude-3-5-haiku-latest`) — set it to whatever your account supports if the default errors.
+Without a key the mode still works but returns clearly-labelled **simulated** output, so you can preview the interface. The model is set in the AI machine page (a field near the top) and defaults to `claude-haiku-4-5` (the cheapest). You can also set a server-wide default with `AI_MODEL=...`. Model names change over time — if a run returns a "model not found" error, pick a current id from platform.claude.com/docs (e.g. `claude-haiku-4-5`, `claude-sonnet-5`).
 
 ## Notes
 
@@ -71,3 +71,12 @@ Without a key the mode still works but returns clearly-labelled **simulated** ou
 - **Reconnects** are handled: if a player refreshes or drops wifi, they rejoin their seat automatically.
 - **Table size** — designed for 3–7 per room, like the physical game. One server can host many rooms at once (run several codes for several tables).
 - The cards are your real designs: `public/cards/` are pixel renders of `agent_cards.pptx`; the Act 3 editable cards are rebuilt in HTML from `agents.js` so they can be amended live.
+
+## License
+
+Two parts, licensed separately:
+
+- **Code** — [MIT License](LICENSE). Use, adapt, and host it freely.
+- **Game content & artwork** — © 2026 Rachel Horst, [CC BY-NC-SA 4.0](LICENSE-CONTENT.md). Share and adapt for non-commercial use with attribution; adaptations stay under the same license.
+
+By Dr. Rachel Horst, UBC MET.

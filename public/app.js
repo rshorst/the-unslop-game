@@ -21,7 +21,7 @@
     ws.onmessage = function(ev){
       var m; try{ m=JSON.parse(ev.data);}catch(e){return;}
       if(m.type==='joined'){ MYID=m.playerId; IS_FAC=m.isFacilitator; code=m.code; store('unslop_code',code); store('unslop_pid',MYID); }
-      else if(m.type==='state'){ state=m; MYID=m.youId; IS_FAC=m.isFacilitator; render(); }
+      else if(m.type==='state'){ state=m; MYID=m.youId; IS_FAC=m.isFacilitator; if(!ai) render(); }
       else if(m.type==='error'){ flash(m.message); if(!state) landing(); }
     };
     ws.onclose = function(){ setTimeout(function(){ connect(function(){ var c=load('unslop_code'), p=load('unslop_pid'); if(c&&p) send({type:'rejoin',code:c,playerId:p}); }); }, 900); };
@@ -156,29 +156,34 @@
   // =====================================================================
   //  FACILITATOR TOOLBAR + TIMER
   // =====================================================================
-  var timer = { remaining:0, running:false, _iv:null };
+  var timer = { elapsed:0, running:false };
   function fmt(s){ s=Math.max(0,s|0); var m=(s/60)|0, ss=s%60; return m+':'+(ss<10?'0':'')+ss; }
-  function tickTimer(){ if(timer.running){ timer.remaining--; if(timer.remaining<=0){ timer.remaining=0; timer.running=false; flash('Time!'); } var c=document.getElementById('clock'); if(c) c.textContent=fmt(timer.remaining); } }
+  function tickTimer(){ if(timer.running){ timer.elapsed++; var c=document.getElementById('clock'); if(c) c.textContent=fmt(timer.elapsed); } }
   setInterval(tickTimer,1000);
-  window.__setTimer=function(min){ timer.remaining=min*60; timer.running=true; var c=document.getElementById('clock'); if(c)c.textContent=fmt(timer.remaining); };
+  // act transitions restart the stopwatch from zero
+  window.__setTimer=function(){ timer.elapsed=0; timer.running=true; var c=document.getElementById('clock'); if(c)c.textContent=fmt(timer.elapsed); };
   window.__toggleTimer=function(){ timer.running=!timer.running; };
+  window.__resetTimer=function(){ timer.elapsed=0; timer.running=false; var c=document.getElementById('clock'); if(c)c.textContent=fmt(0); };
 
   function toolbar(){
-    if(!IS_FAC) return '';
+    if(!state || !state.room) return '';
     var r=state.room;
-    return '<div class="toolbar"><div class="row">'+
-      '<div class="row" style="gap:6px"><span class="pill">Room '+esc(r.code)+'</span>'+
-        '<span class="lbl" style="margin:0 2px">Review</span>'+
+    var left = '<div class="row" style="gap:6px"><span class="pill">Room '+esc(r.code)+'</span>';
+    if(IS_FAC){
+      left += '<span class="lbl" style="margin:0 2px">Review</span>'+
         '<button class="sm ghost" onclick="__reviewAct(1)">Act 1</button>'+
         '<button class="sm ghost" onclick="__reviewAct(2)">Act 2</button>'+
-        '<button class="sm ghost" onclick="__reviewAct(3)">Act 3</button></div>'+
-      '<div class="row" style="gap:8px">'+
-        '<span class="clock" id="clock">'+fmt(timer.remaining)+'</span>'+
+        '<button class="sm ghost" onclick="__reviewAct(3)">Act 3</button>';
+    }
+    left += '<button class="sm ghost" onclick="__aiMode()" title="Explore the AI machine">AI machine</button></div>';
+    var right = '';
+    if(IS_FAC){
+      right = '<div class="row" style="gap:8px">'+
+        '<span class="clock" id="clock">'+fmt(timer.elapsed)+'</span>'+
         '<button class="sm ghost" onclick="__toggleTimer()">Start / pause</button>'+
-        '<button class="sm ghost" onclick="__setTimer(13)">Set 13m</button>'+
-        '<button class="sm ghost" onclick="__setTimer(8)">Set 8m</button>'+
-        '<button class="sm ghost" onclick="__setTimer(22)">Set 22m</button>'+
-      '</div></div></div>';
+        '<button class="sm ghost" onclick="__resetTimer()">Reset</button></div>';
+    }
+    return '<div class="toolbar"><div class="row">'+left+right+'</div></div>';
   }
 
   function playersBar(){
@@ -228,8 +233,8 @@
           '<span class="muted" style="font-size:14px">'+r.players.length+' player(s) at the table</span></div>'+
       '</div>'+ '<div class="panel" style="margin-top:14px">'+browse+'</div>';
     } else {
-      app.innerHTML =
-      '<div class="panel center col" style="align-items:center;margin-top:4vh">'+
+      app.innerHTML = toolbar()+
+      '<div class="panel center col" style="align-items:center;margin-top:2vh">'+
         '<div class="pill">In room '+esc(r.code)+'</div>'+
         '<h2>You\'re in. Waiting for the facilitator…</h2>'+
         '<div class="seed" style="margin:8px 0">'+esc(r.seed)+'</div>'+
@@ -562,6 +567,28 @@
   var ai = null;
   var aiKeyOpen = false;
   function aiClone(x){ return JSON.parse(JSON.stringify(x)); }
+  var AI_PALETTE=[
+    {s:'#d0563f',t:'rgba(208,86,63,.18)'},{s:'#2f7d78',t:'rgba(47,125,120,.18)'},
+    {s:'#b8862b',t:'rgba(184,134,43,.20)'},{s:'#8a4f86',t:'rgba(138,79,134,.18)'},
+    {s:'#5f8a3f',t:'rgba(95,138,63,.18)'},{s:'#3f6f9e',t:'rgba(63,111,158,.18)'},
+    {s:'#9c6b4a',t:'rgba(156,107,74,.18)'},{s:'#c26d86',t:'rgba(194,109,134,.18)'},
+    {s:'#5f6b7a',t:'rgba(95,107,122,.18)'},{s:'#7a5aa8',t:'rgba(122,90,168,.18)'}
+  ];
+  function aiColor(i){ return AI_PALETTE[((i%AI_PALETTE.length)+AI_PALETTE.length)%AI_PALETTE.length]; }
+  function aiTok(s){ return (s||'').split(/(\s+)/); }
+  function aiDiff(a,b){
+    var n=a.length,m=b.length, dp=[];
+    for(var i=0;i<=n;i++) dp.push(new Array(m+1).fill(0));
+    for(var i=n-1;i>=0;i--) for(var j=m-1;j>=0;j--) dp[i][j]= a[i]===b[j]? dp[i+1][j+1]+1 : (dp[i+1][j]>=dp[i][j+1]?dp[i+1][j]:dp[i][j+1]);
+    var res=[], i=0, j=0;
+    while(i<n&&j<m){
+      if(a[i]===b[j]){ res.push({t:b[j],added:false,oldIdx:i}); i++; j++; }
+      else if(dp[i+1][j]>=dp[i][j+1]){ i++; }
+      else { res.push({t:b[j],added:true,oldIdx:-1}); j++; }
+    }
+    while(j<m){ res.push({t:b[j],added:true,oldIdx:-1}); j++; }
+    return res;
+  }
   function aiKey(){ try{ return localStorage.getItem('unslop_ai_key')||''; }catch(e){ return ''; } }
   window.__aiKeyToggle=function(){ aiKeyOpen=!aiKeyOpen; aiScreen(); };
   window.__aiSaveKey=function(){
@@ -571,7 +598,29 @@
     aiKeyOpen=false; aiScreen(); flash(v?'Key saved in this browser':'Enter a key');
   };
   window.__aiForgetKey=function(){ try{ localStorage.removeItem('unslop_ai_key'); }catch(e){} aiKeyOpen=true; aiScreen(); flash('Key forgotten'); };
+  window.__aiSaveRoomKey=function(){
+    var el=document.getElementById('ai-key'); var v=(el?el.value:'').trim();
+    if(!v || v.indexOf('sk-')!==0){ flash('Paste a valid key (starts with sk-)'); return; }
+    send({type:'setAiKey',key:v}); aiKeyOpen=false; flash('Shared key set for the room'); setTimeout(aiScreen,350);
+  };
+  window.__aiClearRoomKey=function(){ send({type:'setAiKey',key:''}); flash('Shared key removed'); setTimeout(aiScreen,350); };
   function aiKeyRow(){
+    // In a room: the facilitator sets one shared key for everyone.
+    if(ai.roomCode){
+      var roomSet = state && state.room && state.room.aiKeySet;
+      if(IS_FAC){
+        if(roomSet && !aiKeyOpen){
+          return '<div class="note" style="border-color:#3fae5a;margin-top:10px">✓ <b>Shared key set for this room</b> — everyone here can run the AI on it. <button class="sm ghost" onclick="__aiKeyToggle()">Change</button> <button class="sm ghost" onclick="__aiClearRoomKey()">Remove</button></div>';
+        }
+        return '<div class="panel col" style="margin-top:10px"><div class="lbl">Shared Anthropic key for this room</div>'+
+          '<div class="muted" style="font-size:13px">Paste your key once and <b>everyone in the room</b> can explore the AI machine on it — even mid-game. It stays on the server for this room only and is never sent to players. Get one at <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a>.</div>'+
+          '<input id="ai-key" type="password" placeholder="sk-ant-..." autocomplete="off">'+
+          '<div class="row"><button class="red sm" onclick="__aiSaveRoomKey()">Set room key</button></div></div>';
+      }
+      if(roomSet) return '<div class="note" style="border-color:#3fae5a;margin-top:10px">✓ Using the <b>shared key</b> your facilitator set for this room — just design and run.</div>';
+      return '<div class="note act" style="margin-top:10px"><b>No shared key yet.</b> Ask your facilitator to set one for the room — or paste your own below.'+
+        '<div style="margin-top:8px"><input id="ai-key" type="password" placeholder="sk-ant-... (your own)" autocomplete="off"><div class="row" style="margin-top:6px"><button class="red sm" onclick="__aiSaveKey()">Use my key</button></div></div></div>';
+    }
     var have = aiKey() || ai.hasKey;
     if(have && !aiKeyOpen){
       var src = aiKey()? 'stored in this browser' : 'set on the server';
@@ -588,23 +637,30 @@
 
   window.__aiMode = function(){
     if(ai){ aiScreen(); return; }
+    var inRoom = !!(state && state.room && MYID);
     fetch('api/agents').then(function(r){return r.json();}).then(function(d){
       var agents=(d.agents||[]).map(function(a){ return { id:a.id, custom:false, slop:aiClone(a.slop), unslop:aiClone(a.unslop) }; });
-      ai = { seed:'Should AI be allowed in K–12 schools?', face:'slop', drafter:d.drafter,
+      ai = { seed: inRoom? state.room.seed : 'Should AI be allowed in K–12 schools?', face:'slop', drafter:d.drafter,
         agents:agents, _default:aiClone(agents), hasKey:d.hasKey, model:d.model,
+        roomCode: inRoom? state.room.code : null,
         running:false, runningName:'', trail:[], finalText:'' };
       aiScreen();
     }).catch(function(){ flash('Could not load agents'); });
   };
-  window.__aiHome=function(){ ai=null; landing(); };
+  window.__aiHome=function(){ ai=null; render(); };
   window.__aiFace=function(fc){ __aiCapture(); ai.face=fc; aiScreen(); };
   window.__aiReset=function(){ __aiCapture(); ai.agents=aiClone(ai._default); aiScreen(); flash('Lineup reset'); };
   window.__aiSaveEdits=function(){ __aiCapture(); aiScreen(); flash('Edits saved'); };
   window.__aiMoveA=function(i,dir){ __aiCapture(); var j=i+dir; if(j<0||j>=ai.agents.length) return; var t=ai.agents[i]; ai.agents[i]=ai.agents[j]; ai.agents[j]=t; aiScreen(); };
+  var aiDragIdx=null;
+  window.__aiDragStart=function(e,i){ aiDragIdx=i; if(e.dataTransfer){ e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain',String(i)); }catch(_){} } };
+  window.__aiDragOver=function(e,el){ e.preventDefault(); if(e.dataTransfer) e.dataTransfer.dropEffect='move'; if(el) el.classList.add('dragover'); };
+  window.__aiDrop=function(e,i){ e.preventDefault(); var from=aiDragIdx; aiDragIdx=null; if(from==null||from===i){ aiScreen(); return; } __aiCapture(); var moved=ai.agents.splice(from,1)[0]; ai.agents.splice(i,0,moved); aiScreen(); };
   window.__aiCut=function(i){ __aiCapture(); ai.agents.splice(i,1); aiScreen(); };
   window.__aiAdd=function(){ __aiCapture(); var blank={name:'New Agent',cares:'',refuses:'',skills:[]}; ai.agents.push({id:'ai-'+Math.random().toString(36).slice(2,6),custom:true,slop:aiClone(blank),unslop:aiClone(blank)}); aiScreen(); };
   function __aiCapture(){
     var seed=document.getElementById('ai-seed'); if(seed) ai.seed=seed.value;
+    var mdl=document.getElementById('ai-model'); if(mdl) ai.model=mdl.value.trim();
     document.querySelectorAll('[data-ai-i]').forEach(function(el){
       var i=+el.getAttribute('data-ai-i'); var a=ai.agents[i]; if(!a) return; var s=a[ai.face]||(a[ai.face]={});
       var n=el.querySelector('.ai-name'), c=el.querySelector('.ai-cares'), r=el.querySelector('.ai-refuses'), k=el.querySelector('.ai-skills');
@@ -616,7 +672,7 @@
   function aiScreen(){
     var f=ai.face;
     var head='<div class="row" style="justify-content:space-between"><div><span class="pill red">AI machine</span> <span class="muted" style="font-size:13px">design the agents · run them · tweak · re-run</span></div>'+
-      '<button class="sm ghost" onclick="__aiHome()">◀ Back to home</button></div>';
+      '<button class="sm ghost" onclick="__aiHome()">'+(ai.roomCode?'◀ Back to the game':'◀ Back to home')+'</button></div>';
     var keyWarn = aiKeyRow();
     var controls='<div class="panel col">'+
       '<div class="lbl">Seed</div><input id="ai-seed" value="'+esc(ai.seed)+'">'+
@@ -624,16 +680,26 @@
         '<button class="sm '+(f==='slop'?'':'ghost')+'" onclick="__aiFace(\'slop\')">Slop side</button>'+
         '<button class="sm '+(f==='unslop'?'':'ghost')+'" onclick="__aiFace(\'unslop\')">Unslop side</button>'+
         '<button class="sm ghost" onclick="__aiReset()">Reset lineup</button></div>'+
-      '<div class="muted" style="font-size:12px">model: '+esc(ai.model||'')+'</div></div>';
+      '<div class="lbl" style="margin-top:6px">Model</div><input id="ai-model" value="'+esc(ai.model||'')+'" placeholder="claude-haiku-4-5">'+
+      '<div class="muted" style="font-size:12px">The Anthropic model the agents run on. Default is the cheapest (Haiku).</div></div>';
+    var fc = f==='unslop'?'unslop':'slop';
     var lineup = ai.agents.map(function(a,i){
       var s=a[f]||{};
-      return '<div class="panel col" data-ai-i="'+i+'" style="padding:14px;gap:6px">'+
-        '<div class="row" style="justify-content:space-between;align-items:center"><input class="ai-name" value="'+esc(s.name||'')+'" style="font-weight:700;font-size:17px;border:none;background:transparent;border-bottom:1px dashed var(--line);max-width:60%">'+
-          '<div class="row" style="gap:4px"><button class="sm ghost" onclick="__aiMoveA('+i+',-1)" title="move up">↑</button><button class="sm ghost" onclick="__aiMoveA('+i+',1)" title="move down">↓</button><button class="sm ghost" onclick="__aiCut('+i+')" title="remove">✕</button></div></div>'+
-        '<div class="lbl">i care about</div><textarea class="ai-cares" style="min-height:42px">'+esc(s.cares||'')+'</textarea>'+
-        '<div class="lbl">i refuse</div><textarea class="ai-refuses" style="min-height:42px">'+esc(s.refuses||'')+'</textarea>'+
-        '<div class="lbl">moves (one per line)</div><textarea class="ai-skills" style="min-height:56px">'+esc((s.skills||[]).join('\n'))+'</textarea>'+
-      '</div>';
+      return '<div class="ai-card '+fc+'" data-ai-i="'+i+'" ondragover="__aiDragOver(event,this)" ondragleave="this.classList.remove(\'dragover\')" ondrop="__aiDrop(event,'+i+')">'+
+        '<div class="eng"></div><div class="cbody">'+
+          '<div class="ctop">'+
+            '<span class="drag-handle" draggable="true" ondragstart="__aiDragStart(event,'+i+')" title="drag to reorder">⠿</span>'+
+            '<span class="ai-swatch" style="background:'+aiColor(i).s+'" title="this agent\'s colour in the output"></span>'+
+            '<span class="faceTag '+fc+'">'+(f==='unslop'?'UNSLOP':'SLOP')+'</span>'+
+            '<div class="row" style="gap:2px;margin-left:auto"><button class="sm ghost" onclick="__aiMoveA('+i+',-1)" title="move up">↑</button><button class="sm ghost" onclick="__aiMoveA('+i+',1)" title="move down">↓</button><button class="sm ghost" onclick="__aiCut('+i+')" title="remove">✕</button></div>'+
+          '</div>'+
+          '<input class="ai-name-edit ai-name" value="'+esc(s.name||'')+'">'+
+          '<div class="csec"><span class="lbl">◯ Stance</span>'+
+            '<div class="cfield"><em>i care about</em><textarea class="ai-edit ai-cares" rows="2">'+esc(s.cares||'')+'</textarea></div>'+
+            '<div class="cfield"><em>i refuse</em><textarea class="ai-edit ai-refuses" rows="2">'+esc(s.refuses||'')+'</textarea></div>'+
+          '</div>'+
+          '<div class="csec"><span class="lbl">◯ Moves</span> <span class="muted" style="font-size:11px">(one per line)</span><textarea class="ai-edit ai-skills" rows="3">'+esc((s.skills||[]).join('\n'))+'</textarea></div>'+
+        '</div></div>';
     }).join('');
     var left='<div class="col">'+controls+
       '<div class="lbl" style="margin-top:6px">The lineup — the draft passes through these in order</div>'+lineup+
@@ -642,31 +708,52 @@
     app.innerHTML = head+keyWarn+'<div class="split" style="margin-top:12px;align-items:start">'+left+'<div class="col">'+aiOutput()+'</div></div>';
   }
   function aiOutput(){
-    if(!ai.trail.length && !ai.running) return '<div class="panel muted">Design the machine on the left, then hit <b>Run</b>. Each agent takes the draft, applies its move, and passes it on — you\'ll watch the output build up here. Then tweak an agent and run again to see what changes.</div>';
+    if(!ai.trail.length && !ai.running) return '<div class="panel muted">Design the machine on the left, then hit <b>Run</b>. Each agent takes the draft, applies its move, and passes it on — you\'ll watch the output build up here, <b>colour-coded by which agent changed what</b>. Then tweak an agent and run again to see what changes.</div>';
+    var legend = '<div class="ai-legend">'+ ai.agents.map(function(a,i){ var s=a[ai.face]||{}; return '<span class="item"><span class="sw" style="background:'+aiColor(i).s+'"></span>'+esc(s.name||('Agent '+(i+1)))+'</span>'; }).join('')+'</div>';
     var running = ai.running? '<div class="note act">Running <b>'+esc(ai.runningName||'…')+'</b></div>':'';
-    var steps = ai.trail.map(function(t){
-      return '<div class="sheet" style="margin-bottom:10px"><div class="who lbl">'+esc(t.name)+(t.note?' · '+esc(t.note):'')+'</div><div class="content" style="font-size:15px;white-space:pre-wrap">'+esc(t.text)+'</div></div>';
+    var steps = ai.trail.map(function(st){
+      if(st.kind==='draft'){
+        return '<div class="sheet" style="margin-bottom:10px"><div class="who lbl">'+esc(st.name)+' · first draft</div><div class="content ai-out" style="font-size:15px;white-space:pre-wrap">'+esc(st.text)+'</div></div>';
+      }
+      var c=aiColor(st.colorIdx);
+      var html = st.diff.map(function(dd){ return dd.added? '<span class="add" style="background:'+c.t+';border-bottom:2px solid '+c.s+'">'+esc(dd.t)+'</span>' : esc(dd.t); }).join('');
+      return '<div class="sheet" style="margin-bottom:10px;border-left:3px solid '+c.s+'"><div class="who lbl" style="color:'+c.s+'">'+esc(st.name)+(st.note?' · '+esc(st.note):'')+'</div><div class="content ai-out" style="font-size:15px;white-space:pre-wrap">'+(html||'<span class="muted">(left unchanged)</span>')+'</div></div>';
     }).join('');
-    var fin=(!ai.running && ai.finalText)? '<div class="panel" style="border:2px solid var(--red);margin-top:6px"><div class="lbl red">Final output</div><div class="content" style="font-size:17px;white-space:pre-wrap;margin-top:6px">'+esc(ai.finalText)+'</div></div>':'';
-    return '<div class="lbl">What the machine produced</div>'+running+steps+fin;
+    var fin='';
+    if(!ai.running && ai.finalTokens){
+      var fhtml = ai.finalTokens.map(function(t,k){
+        if(/^\s+$/.test(t)) return esc(t);
+        var owner=ai.finalAttr[k];
+        if(owner==='draft') return esc(t);
+        return '<span style="border-bottom:2px solid '+aiColor(owner).s+'">'+esc(t)+'</span>';
+      }).join('');
+      fin='<div class="panel" style="border:2px solid var(--red);margin-top:6px"><div class="lbl red">Final output — underlined by who contributed each part</div><div class="content ai-out" style="font-size:17px;white-space:pre-wrap;margin-top:6px">'+fhtml+'</div></div>';
+    }
+    return '<div class="lbl">What the machine produced</div>'+legend+running+steps+fin;
   }
   window.__aiRun = function(){
     __aiCapture();
     if(ai.running) return;
-    ai.running=true; ai.trail=[]; ai.finalText=''; ai.runningName='the first agent'; aiScreen();
+    ai.running=true; ai.trail=[]; ai.finalText=''; ai.finalTokens=null; ai.finalAttr=null; ai.runningName='the first agent'; aiScreen();
     var f=ai.face, d=ai.drafter, df=d[f]||{};
     var notes=[];
+    var curTok=[], curAttr=[]; // current draft tokens and who owns each
     aiPost({mode:'draft', seed:ai.seed, face:f, drafter:{name:df.name,cares:df.cares,refuses:df.refuses,skills:df.skills}})
     .then(function(res){
-      var draft=res.text; ai.trail.push({name:df.name||'First Agent',note:'first draft',text:draft}); ai.finalText=draft; aiScreen();
+      var draft=res.text;
+      curTok=aiTok(draft); curAttr=curTok.map(function(){return 'draft';});
+      ai.trail.push({kind:'draft',name:df.name||'First Agent',text:draft}); ai.finalText=draft; aiScreen();
       var i=0;
       function nextAgent(prevDraft){
-        if(i>=ai.agents.length){ ai.running=false; ai.runningName=''; aiScreen(); return; }
-        var s=ai.agents[i][f]||{}; ai.runningName=s.name||('agent '+(i+1)); aiScreen();
+        if(i>=ai.agents.length){ ai.running=false; ai.runningName=''; ai.finalTokens=curTok; ai.finalAttr=curAttr; aiScreen(); return; }
+        var idx=i, s=ai.agents[idx][f]||{}; ai.runningName=s.name||('agent '+(idx+1)); aiScreen();
         aiPost({mode:'revise', seed:ai.seed, face:f, agent:{name:s.name,cares:s.cares,refuses:s.refuses,skills:s.skills}, draft:prevDraft, priorNotes:notes})
         .then(function(r){
           var nd=r.text||prevDraft; if(r.note) notes.push((s.name||'agent')+': '+r.note);
-          ai.trail.push({name:s.name||('Agent '+(i+1)),note:r.note||'',text:nd}); ai.finalText=nd; i++; aiScreen();
+          var nt=aiTok(nd); var diff=aiDiff(curTok,nt);
+          var nAttr=diff.map(function(dd){ return dd.added? idx : curAttr[dd.oldIdx]; });
+          ai.trail.push({kind:'agent',name:s.name||('Agent '+(idx+1)),note:r.note||'',colorIdx:idx,diff:diff});
+          curTok=nt; curAttr=nAttr; ai.finalText=nd; i++; aiScreen();
           nextAgent(nd);
         }).catch(function(e){ ai.running=false; aiScreen(); flash('Run error: '+(e.message||e)); });
       }
@@ -675,6 +762,8 @@
   };
   function aiPost(body){
     var k=aiKey(); if(k) body.apiKey=k;
+    if(ai.roomCode) body.room=ai.roomCode;
+    if(ai.model) body.model=ai.model;
     return fetch('api/agent-step',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json();}).then(function(d){ if(d.error) throw new Error(d.error); return d; });
   }
