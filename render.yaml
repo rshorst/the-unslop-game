@@ -1,0 +1,12 @@
+# Render blueprint — deploy The (un)Slop Game as a free Node web service.
+# In Render: New → Blueprint → point at this repo. Render reads this file.
+# Leave ANTHROPIC_API_KEY UNSET so the public AI machine uses each visitor's
+# own key (bring-your-own). Set it only for a private, trusted audience.
+services:
+  - type: web
+    name: unslop-game
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true

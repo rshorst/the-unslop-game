@@ -1,0 +1,18 @@
+{
+  "name": "unslop-online-game",
+  "version": "1.0.0",
+  "description": "The (un)Slop Game — synchronous, room-by-code online version. By Dr. Rachel Horst, UBC MET.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}
