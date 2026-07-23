@@ -6,7 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "test": "node test.js"
+    "test": "node test.js",
+    "test:relay": "node test-relay-handoff.js && node test-relay-dom.js && node test-relay-edges.js && node test-ai-guard.js && node test-ai-stay.js"
   },
   "engines": {
     "node": ">=18"
@@ -14,5 +15,8 @@
   "dependencies": {
     "express": "^4.19.2",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
   }
 }

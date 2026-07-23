@@ -21,7 +21,19 @@
     ws.onmessage = function(ev){
       var m; try{ m=JSON.parse(ev.data);}catch(e){return;}
       if(m.type==='joined'){ MYID=m.playerId; IS_FAC=m.isFacilitator; code=m.code; store('unslop_code',code); store('unslop_pid',MYID); }
-      else if(m.type==='state'){ state=m; MYID=m.youId; IS_FAC=m.isFacilitator; if(!ai) render(); }
+      else if(m.type==='state'){
+        var prevPhase = (state && state.room) ? state.room.phase : null;
+        state=m; MYID=m.youId; IS_FAC=m.isFacilitator;
+        var newPhase = (m.room) ? m.room.phase : null;
+        if(ai){
+          // A player may explore the AI machine mid-game. Don't yank them out on
+          // incidental updates (ready ticks, joins) — but NEVER strand them when the
+          // facilitator advances the phase: follow the table to the new screen.
+          if(newPhase !== prevPhase){ ai=null; flash('The facilitator moved the game on.'); safeRender(); }
+        } else {
+          safeRender();
+        }
+      }
       else if(m.type==='error'){ flash(m.message); if(!state) landing(); }
     };
     ws.onclose = function(){ setTimeout(function(){ connect(function(){ var c=load('unslop_code'), p=load('unslop_pid'); if(c&&p) send({type:'rejoin',code:c,playerId:p}); }); }, 900); };
@@ -95,6 +107,7 @@
   }
   function rosterById(id){
     if(!state) return null;
+    if(id==='first-agent' && state.room && state.room.drafter){ var d=state.room.drafter; return {id:'first-agent',hasImage:true,slop:d.slop,unslop:d.unslop,custom:false}; }
     var r=(state.room.roster||[]).find(function(a){return a.id===id;});
     return r||null;
   }
@@ -211,11 +224,16 @@
         '<button class="sm '+(cf==='slop'?'':'ghost')+'" onclick="__deck(\'slop\')">Full slop deck</button>'+
         '<button class="sm '+(cf==='unslop'?'':'ghost')+'" onclick="__deck(\'unslop\')">Full unslop deck</button>'+
       '</div></div>'+
-      '<div class="muted" style="font-size:14px;margin:6px 0 10px">Everyone gets a random card when the game starts. Tap any card to read it full-size.</div>'+
-      '<div class="roster">'+ r.roster.map(function(a){
+      '<div class="muted" style="font-size:14px;margin:6px 0 10px">The full deck, in order: the opening drafter, the revising agents, and the closing agent. Everyone gets a random card when the game starts. Tap any card to read it full-size.</div>'+
+      '<div class="roster">'+ (
+        [{id:'first-agent',hasImage:true,slop:r.drafter.slop,unslop:r.drafter.unslop}]
+          .concat((r.roster||[]).filter(function(a){return a.id!=='ending';}))
+          .concat((r.roster||[]).filter(function(a){return a.id==='ending';}))
+      ).map(function(a){
         var nm=(a[cf]||{}).name||'';
+        var role = a.id==='first-agent'?' <span class="muted">· opening</span>':(a.id==='ending'?' <span class="muted">· closing</span>':'');
         var img = a.hasImage? '<img src="cards/card_'+esc(a.id)+'_'+cf+'.png" alt="">' : '<div style="padding:24px" class="muted center">'+esc(nm)+'</div>';
-        return '<div class="mini" onclick="__peek(\''+esc(a.id)+'\',\''+cf+'\')">'+img+'<div class="cap">'+esc(nm)+'</div></div>';
+        return '<div class="mini" onclick="__peek(\''+esc(a.id)+'\',\''+cf+'\')">'+img+'<div class="cap">'+esc(nm)+role+'</div></div>';
       }).join('')+'</div>';
 
     if(IS_FAC){
@@ -771,6 +789,12 @@
   // =====================================================================
   //  ROUTER
   // =====================================================================
+  // Never let a render exception silently strand a client on a stale screen: a
+  // thrown error here would otherwise leave the old DOM in place with no signal.
+  function safeRender(){
+    try { render(); }
+    catch(e){ if(window.console && console.error) console.error('render failed', e); flash('Display glitch — retrying…'); }
+  }
   function render(){
     if(!state){ landing(); return; }
     var ph=state.room.phase;

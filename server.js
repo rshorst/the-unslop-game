@@ -405,6 +405,12 @@ function send(sock, obj) {
 // ---------- message handling ----------
 wss.on('connection', (socket) => {
   socket.meta = { roomCode: null, playerId: null };
+  // Heartbeat: a half-open ("zombie") socket never fires 'close', so the player
+  // stays marked connected and silently misses every broadcast — including phase
+  // transitions. Ping periodically; terminate any socket that missed the last pong,
+  // which fires 'close' and lets the client reconnect + rejoin into the current phase.
+  socket.isAlive = true;
+  socket.on('pong', () => { socket.isAlive = true; });
 
   socket.on('message', (raw) => {
     let msg;
@@ -592,6 +598,16 @@ wss.on('connection', (socket) => {
     }
   });
 });
+
+// ping every 30s; drop sockets that didn't pong since the last round
+const heartbeat = setInterval(() => {
+  wss.clients.forEach((socket) => {
+    if (socket.isAlive === false) return socket.terminate();
+    socket.isAlive = false;
+    try { socket.ping(); } catch (e) {}
+  });
+}, 30 * 1000);
+wss.on('close', () => clearInterval(heartbeat));
 
 // prune empty rooms every 10 min
 setInterval(() => {
