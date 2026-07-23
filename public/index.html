@@ -65,13 +65,14 @@
   .cardwrap{max-width:420px}
   /* ---- roomy two-panel card ---- */
   .card2{position:relative;background:var(--paper);border:2.5px solid #34302a;border-radius:14px;overflow:hidden;box-shadow:var(--shadow)}
-  .card2.slop{border-color:#d0563f}
-  .card2.unslop{border-color:#2f7d78}
-  .card2 .eng{position:absolute;inset:0;background:url('assets/engine.png') center/135% no-repeat;opacity:.045;pointer-events:none;mix-blend-mode:multiply}
+  .card2.slop{border-color:#d0563f;background:#f6f1e6 url('assets/card-bg-slop.jpg') center/cover no-repeat}
+  .card2.unslop{border-color:#2f7d78;background:#c9d3da url('assets/card-bg-unslop.jpg') center/cover no-repeat}
+  /* real card artwork now provides the background; hide the faint engine watermark */
+  .card2 .eng{display:none}
   .faceTag{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;padding:2px 8px;border-radius:999px}
   .faceTag.slop{color:#b8462f;border:1px solid #e0b3a6}
   .faceTag.unslop{color:#276b66;border:1px solid #a9cfcb}
-  .card2 .cbody{position:relative;padding:22px 26px 24px}
+  .card2 .cbody{position:relative;margin:14px;padding:20px 22px 22px;background:rgba(251,248,240,.93);border:1px solid rgba(52,48,42,.14);border-radius:10px;box-shadow:0 2px 12px rgba(40,30,10,.12)}
   .card2 .cname{font-family:var(--serif);font-size:32px;font-weight:700;margin:4px 0 6px;line-height:1.1}
   .panels{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:8px}
   .panels .pane>.csec:first-child{border-top:none;margin-top:2px;padding-top:0}

@@ -148,6 +148,7 @@ function newRoom(code) {
     relayTotal: 0,
     lockedAgentId: null, // Xerox test: everyone uses this agent
     xeroxMode: false,
+    freeAgentChoice: false, // facilitator opt-in: players may swap agents between relay turns
     spotlightSheetId: null,
   };
 }
@@ -220,6 +221,26 @@ function seatPlayer(room, player) {
   room.seatOrder.push(player.id);
 }
 
+// A player who joins after a round is underway has no sheet in the rotation, so
+// they'd be stuck on "waiting for a sheet." Give them their own sheet + holder
+// slot so #sheets stays == #seats and no seat is ever left empty-handed on a pass.
+function seatLiveSheet(room, player) {
+  if (room.phase !== 'draft' && room.phase !== 'relay' && room.phase !== 'closing') return;
+  if (!room.sheets.length) return;
+  const seat = player.seat;
+  if (room.holder.includes(seat)) return; // already holds one
+  room.sheets.push({
+    id: 's_' + seat + '_' + Math.random().toString(36).slice(2, 6),
+    originSeat: seat,
+    originName: player.name,
+    content: '',
+    submitted: false,
+    history: [],
+  });
+  room.holder.push(seat); // they hold their own fresh sheet
+  if (room.phase !== 'draft') room.relayTotal = Math.max(room.relayTotal, room.seatOrder.length - 1);
+}
+
 function currentSheetForSeat(room, seat) {
   const idx = room.holder.findIndex((h) => h === seat);
   return idx >= 0 ? room.sheets[idx] : null;
@@ -269,6 +290,15 @@ function beginRelay(room, opts = {}) {
   room.xeroxMode = !!opts.lockedAgentId;
   room.lockedAgentId = opts.lockedAgentId || null;
   room.spotlightSheetId = null;
+  // Record the opening draft as the first hand on the trail: the Quick Drafter
+  // (slop) / Slow Drafter (unslop) wrote the sheet everyone else now revises.
+  const drafterName = (room.drafter[room.face] || room.drafter.slop).name;
+  room.sheets.forEach((s) => {
+    if (s.submitted && !s.history.some((h) => h.action === 'first draft')) {
+      const dn = (s.draftNote && s.draftNote.trim()) ? s.draftNote : 'The opening draft.';
+      s.history.unshift({ agentName: drafterName, playerName: s.originName, action: 'first draft', note: dn });
+    }
+  });
   const n = room.seatOrder.length;
   // pass once so nobody holds their own draft to start
   if (n > 1) room.holder = room.holder.map((seat) => (seat + 1) % n);
@@ -335,12 +365,14 @@ function viewFor(room, playerId) {
     const s = room.phase === 'draft'
       ? room.sheets[me.seat]
       : currentSheetForSeat(room, me.seat);
-    if (s) mySheet = { id: s.id, originName: s.originName, content: s.content, submitted: s.submitted, history: s.history, mine: s.originSeat === me.seat };
+    if (s) mySheet = { id: s.id, originName: s.originName, content: s.content, submitted: s.submitted, draftNote: s.draftNote || '', history: s.history, mine: s.originSeat === me.seat };
   }
 
   // sheets visible to everyone (facilitator always; spotlight to all; debrief all)
+  // Everyone can browse all sheets in play (read-only for players; the facilitator
+  // also drives the spotlight from them).
   let allSheets = null;
-  if (isFac || room.phase === 'spotlight' || room.phase === 'debrief') {
+  if (room.sheets.length) {
     allSheets = room.sheets.map((s) => ({ id: s.id, originName: s.originName, content: s.content, history: s.history, submitted: s.submitted }));
   }
   const spotlight = room.spotlightSheetId
@@ -372,6 +404,7 @@ function viewFor(room, playerId) {
       act: room.act,
       face: room.face,
       xeroxMode: room.xeroxMode,
+      freeAgentChoice: room.freeAgentChoice,
       lockedAgentId: room.lockedAgentId,
       relayRound: room.relayRound,
       relayTotal: room.relayTotal,
@@ -441,7 +474,7 @@ wss.on('connection', (socket) => {
       const player = { id, name: (msg.name || 'Player').slice(0, 40), seat: -1, agentId: null, connected: true, socket, ready: false };
       room.players[id] = player;
       seatPlayer(room, player);
-      if (room.phase !== 'lobby') dealOne(room, id); // late joiner gets a random open card
+      if (room.phase !== 'lobby') { dealOne(room, id); seatLiveSheet(room, player); } // late joiner: card + a sheet in the rotation
       socket.meta = { roomCode: code, playerId: id };
       send(socket, { type: 'joined', code, playerId: id, isFacilitator: false });
       broadcast(room);
@@ -481,6 +514,7 @@ wss.on('connection', (socket) => {
       if (t === 'deal') { dealAgents(room); broadcast(room); return; }
       if (t === 'startDraft') { dealAgents(room); beginDraft(room); broadcast(room); return; }
       if (t === 'startRelay') { beginRelay(room); broadcast(room); return; }
+      if (t === 'setFreeAgents') { room.freeAgentChoice = !!msg.on; broadcast(room); return; }
       if (t === 'tick') { tickRelay(room); broadcast(room); return; }
       if (t === 'startClosing') { beginClosing(room); broadcast(room); return; }
       if (t === 'spotlight') { room.phase = 'spotlight'; room.spotlightSheetId = msg.sheetId || (room.sheets[0] && room.sheets[0].id); broadcast(room); return; }
@@ -541,12 +575,20 @@ wss.on('connection', (socket) => {
       }
     }
 
+    // ---- free agent choice: any player may swap their agent between relay turns ----
+    if (t === 'pickAgent' && room.freeAgentChoice && room.phase === 'relay' && !room.xeroxMode) {
+      const ag = findAgent(room, msg.agentId);
+      if (ag && !room.disabled[ag.id]) { room.players[playerId].agentId = ag.id; broadcast(room); }
+      return;
+    }
+
     // ---- player actions ----
     if (t === 'submitDraft') {
       const p = room.players[playerId];
       const s = room.sheets[p.seat];
       if (s && room.phase === 'draft') {
         s.content = (msg.content || '').slice(0, 4000);
+        s.draftNote = (msg.note || '').slice(0, 500);
         s.submitted = true;
         p.ready = true;
       }

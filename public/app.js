@@ -196,7 +196,25 @@
         '<button class="sm ghost" onclick="__toggleTimer()">Start / pause</button>'+
         '<button class="sm ghost" onclick="__resetTimer()">Reset</button></div>';
     }
-    return '<div class="toolbar"><div class="row">'+left+right+'</div></div>';
+    return '<div class="toolbar"><div class="row">'+left+right+'</div></div>'+playersStrip();
+  }
+
+  // Table status visible on every in-game screen, to everyone (not just the facilitator).
+  function playersStrip(){
+    var r=state.room;
+    if(!r || !r.players || !r.players.length || r.phase==='lobby') return '';
+    var showReady = (r.phase==='draft'||r.phase==='relay'||r.phase==='closing');
+    return '<div class="panel" style="padding:8px 12px;margin:0 0 12px;box-shadow:none">'+
+      '<div class="row" style="justify-content:space-between;gap:8px">'+
+        '<div class="row" style="gap:6px;align-items:center"><span class="lbl">Table</span>'+
+          r.players.map(function(p){
+            var d = !p.connected?'dot':(p.ready?'dot ready':'dot on');
+            var you = p.id===MYID?' <b>(you)</b>':'';
+            var star = p.id===facId()?' ★':'';
+            return '<span class="chip" style="padding:4px 10px;font-size:13px"><span class="'+d+'"></span>'+esc(p.name)+you+star+'</span>';
+          }).join('')+'</div>'+
+        (showReady?'<span class="muted" style="font-size:13px;white-space:nowrap">'+readyCount()+'</span>':'')+
+      '</div></div>';
   }
 
   function playersBar(){
@@ -262,6 +280,7 @@
   }
   window.__peek=function(id,face){
     var ag=rosterById(id); if(!ag) return;
+    // Wide readable card (now carries the artwork background from CSS).
     var body = '<div class="cardfull">'+cardHTML(ag,face,false)+'</div>';
     openModal(body+'<div class="row center" style="justify-content:center;margin-top:10px">'+
       '<button class="sm '+(face==='slop'?'':'ghost')+'" onclick="__peek('+"'"+id+"','slop'"+')">Slop side</button>'+
@@ -280,7 +299,7 @@
     var drafterAgent = { id:'first-agent', __drafter:true, slop:r.drafter.slop, unslop:r.drafter.unslop };
     var mode = r.face==='slop'?'Quick':'Slow';
     var head = '<div class="row" style="justify-content:space-between"><div><span class="pill">Act '+r.act+' · '+(r.face==='slop'?'SLOP':'UNSLOP')+'</span> <span class="pill">Draft</span> '+explainBtn()+'</div>'+
-      (IS_FAC?'<button class="red sm" onclick="__startRelay()">Everyone drafted → Start the relay ▶</button>':'')+'</div>';
+      (IS_FAC?'<div class="row"><button class="sm '+(r.freeAgentChoice?'':'ghost')+'" onclick="__toggleFreeAgents()" title="Let players swap to a different agent between turns during the relay. Off = the canonical game (one fixed random agent each).">Free agent choice: '+(r.freeAgentChoice?'on':'off')+'</button><button class="red sm" onclick="__startRelay()">Everyone drafted → Start the relay ▶</button></div>':'')+'</div>';
     var seed = '<div class="seed" style="margin:14px 0">'+esc(r.seed)+'</div>';
     var cardCol = '<div class="cardfull" style="margin-bottom:14px">'+cardHTML(drafterAgent, r.face, false)+'</div>';
     var submitted = s && s.submitted;
@@ -290,13 +309,13 @@
         ? 'Quick Drafter mode: write something fluent, immediately. Don\'t wait to know where you stand.'
         : 'Slow Drafter mode: find one true thing. Ask the person next to you (or in chat) what they actually think, and write from that.')+'</div>'+
       '<textarea id="draft" placeholder="Respond to the seed…">'+esc(s?s.content:'')+'</textarea>'+
+      '<input id="draftNote" placeholder="Optional — a note in the drafter\'s voice on what you did (shows first in the trail)" value="'+esc(s&&s.draftNote?s.draftNote:'')+'">'+
       '<div class="row"><button class="'+(submitted?'ghost':'red')+'" onclick="__submitDraft()">'+(submitted?'Update draft':'Submit draft')+'</button>'+
         (submitted?'<span class="muted">✓ submitted — you can still edit until the relay starts</span>':'')+'</div>'+
     '</div>';
-    var facmon = IS_FAC? '<div class="panel" style="margin-top:14px"><div class="lbl">Table status</div><div style="margin-top:6px">'+playersBar()+'</div><div class="muted" style="margin-top:6px">'+readyCount()+'</div></div>':'';
-    app.innerHTML = toolbar()+head+cardCol+seed+draftCol+facmon;
+    app.innerHTML = toolbar()+head+cardCol+seed+draftCol;
   }
-  window.__submitDraft=function(){ var v=document.getElementById('draft').value.trim(); if(!v){flash('Write a sentence or two first');return;} send({type:'submitDraft',content:v}); flash('Draft submitted'); };
+  window.__submitDraft=function(){ var v=document.getElementById('draft').value.trim(); if(!v){flash('Write a sentence or two first');return;} var n=document.getElementById('draftNote'); send({type:'submitDraft',content:v,note:n?n.value.trim():''}); flash('Draft submitted'); };
   window.__startRelay=function(){ send({type:'startRelay'}); };
 
   // =====================================================================
@@ -310,14 +329,27 @@
     var head='<div class="row" style="justify-content:space-between">'+
       '<div><span class="pill">Act '+r.act+' · '+(r.face==='slop'?'SLOP':'UNSLOP')+'</span> '+
       '<span class="pill">'+(xerox?'XEROX TEST':'Relay')+' · round '+r.relayRound+' / '+r.relayTotal+'</span> '+explainBtn()+'</div>'+
-      (IS_FAC?'<div class="row"><button class="sm" onclick="__tick()">Pass left ▶</button><button class="sm ghost" onclick="__startClosing()" title="Everyone writes a closing next. You can still come back to the relay.">End relay → closing round ▶</button></div>':'')+'</div>';
+      (IS_FAC?'<div class="row"><button class="sm '+(r.freeAgentChoice?'':'ghost')+'" onclick="__toggleFreeAgents()" title="Let players swap to a different agent between turns. Off = the canonical game (one fixed agent each).">Free agent choice: '+(r.freeAgentChoice?'on':'off')+'</button><button class="sm" onclick="__tick()">Pass left ▶</button><button class="sm ghost" onclick="__startClosing()" title="Everyone writes a closing next. You can still come back to the relay.">End relay → closing round ▶</button></div>':'')+'</div>';
     if(IS_FAC) head += '<div class="muted" style="font-size:13px;margin-top:6px">“Pass left” is your metronome. Reading a sheet aloud from the monitor below <b>won\'t</b> end the round. When the lap is done, “End relay → closing round” sends everyone to write a closing.</div>';
+    if(IS_FAC && r.players.length<2) head += '<div class="note act" style="margin-top:8px"><b>Solo table.</b> With one seat, sheets have nowhere to pass. Open more tabs and join with the code to see the relay move — or turn on <b>Free agent choice</b> above to try each agent yourself, turn by turn.</div>';
     if(xerox) head += '<div class="note act" style="margin-top:8px"><b>Xerox test.</b> Every station now applies <b>'+esc(lockedName)+'</b>\'s move — the same rule at scale. Watch it calcify into its own texture.</div>';
 
     // my card (image acts 1/2; xerox uses locked agent)
     var myAgentId = xerox? r.lockedAgentId : (myPlayer()?myPlayer().agentId:null);
     var myAg = rosterById(myAgentId);
     var cardCol = myAg? '<div class="cardfull" style="margin:12px auto">'+cardHTML(myAg,r.face,false)+'</div>' : '<div class="panel muted">No card yet.</div>';
+
+    // free agent choice: swap the agent you play for this turn (never during a Xerox test)
+    var switcher = '';
+    if(r.freeAgentChoice && !xerox){
+      switcher = '<div class="panel col" style="margin-top:12px"><div class="lbl">Free agent choice is on — pick the agent for this turn</div>'+
+        '<div class="muted" style="font-size:13px">Your note this turn is stamped with whichever agent is active. Switch as often as you like.</div>'+
+        '<div class="row" style="flex-wrap:wrap;margin-top:6px">'+
+        (r.roster||[]).filter(function(a){return !r.disabled[a.id];}).map(function(a){
+          var nm=(a[r.face]||a.slop||{}).name||''; var mine=a.id===myAgentId;
+          return '<button class="sm '+(mine?'':'ghost')+'" onclick="__pickAgent(\''+esc(a.id)+'\')">'+esc(nm)+'</button>';
+        }).join('')+'</div></div>';
+    }
 
     var sheetCol;
     if(!s){ sheetCol='<div class="panel muted">Waiting for a sheet to reach you…</div>'; }
@@ -334,9 +366,10 @@
         trailHTML(s.history)+
       '</div>';
     }
-    var facmon = IS_FAC? facMonitor('relay') : '<div class="panel" style="margin-top:14px"><div class="muted">'+readyCount()+'</div></div>';
-    app.innerHTML = toolbar()+head+cardCol+sheetCol+facmon;
+    var facmon = IS_FAC? facMonitor('relay') : sheetBrowser();
+    app.innerHTML = toolbar()+head+cardCol+switcher+sheetCol+facmon;
   }
+  window.__toggleFreeAgents=function(){ send({type:'setFreeAgents', on: !(state && state.room && state.room.freeAgentChoice)}); };
   function trailHTML(hist){
     if(!hist||!hist.length) return '<div class="trail muted" style="font-size:14px">No notes yet — you may be the first hand on this sheet.</div>';
     return '<div class="trail"><div class="lbl">The trail — every hand that touched this sheet</div>'+
@@ -360,13 +393,22 @@
       sheets.map(function(s){ return '<div class="sheet" style="cursor:pointer" onclick="'+fn+'('+"'"+s.id+"'"+')"><div class="lbl">'+esc(s.originName)+'\'s sheet · '+(s.history?s.history.length:0)+' hands</div><div class="content" style="font-size:14px;max-height:120px;overflow:auto">'+esc(s.content||'(empty)')+'</div></div>'; }).join('')+
       '</div></div>';
   }
+  // Read-only browser of every sheet in play, for players (facilitator uses facMonitor).
+  function sheetBrowser(){
+    var sheets=state.allSheets||[];
+    if(!sheets.length) return '<div class="panel" style="margin-top:14px"><div class="muted">'+readyCount()+'</div></div>';
+    return '<div class="panel" style="margin-top:14px"><div class="lbl">All sheets in play — tap any to read (view only)</div>'+
+      '<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));margin-top:10px">'+
+      sheets.map(function(s){ return '<div class="sheet" style="cursor:pointer" onclick="__readAloud('+"'"+s.id+"'"+')"><div class="lbl">'+esc(s.originName)+'\'s sheet · '+(s.history?s.history.length:0)+' hands</div><div class="content" style="font-size:14px;max-height:120px;overflow:auto">'+esc(s.content||'(empty)')+'</div></div>'; }).join('')+
+      '</div></div>';
+  }
   window.__spot=function(id){ send({type:'spotlight',sheetId:id}); };
   window.__readAloud=function(id){
     var s=(state.allSheets||[]).find(function(x){return x.id===id;}); if(!s) return;
-    openModal('<div class="lbl">'+esc(s.originName)+'\'s sheet — read aloud</div>'+
+    openModal('<div class="lbl">'+esc(s.originName)+'\'s sheet</div>'+
       '<div class="seed" style="margin:6px 0 12px">'+esc(state.room.seed)+'</div>'+
       '<div class="sheet"><div class="content">'+esc(s.content||'(empty)')+'</div>'+trailHTML(s.history)+'</div>'+
-      '<div class="row center" style="justify-content:center;margin-top:12px"><button class="sm" onclick="closeModal()">Close — back to the relay</button></div>');
+      '<div class="row center" style="justify-content:center;margin-top:12px"><button class="sm" onclick="closeModal()">Close</button></div>');
   };
 
   // =====================================================================
@@ -390,7 +432,7 @@
         '<div class="row"><button class="red" onclick="__submitClosing()">'+(acted?'Update my closing':'Write the closing → done')+'</button>'+(acted?'<span class="muted">✓ done</span>':'')+'</div>'+
         trailHTML(s.history)+
       '</div>';
-    var facmon = IS_FAC? facMonitor('relay') : '<div class="panel" style="margin-top:14px"><div class="muted">'+readyCount()+'</div></div>';
+    var facmon = IS_FAC? facMonitor('relay') : sheetBrowser();
     app.innerHTML = toolbar()+head+cardCol+sheetCol+facmon;
   }
   window.__submitClosing=function(){ var content=document.getElementById('sheet').value; var note=document.getElementById('note').value.trim(); send({type:'submitClosing',content:content,note:note}); flash('Closing recorded'); };
